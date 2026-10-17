@@ -22,12 +22,12 @@ fault, never an exception you then try to swallow.
 
 ## Do not chase unproven pointers
 
-A multi-hop chase (`[[base + a] + b] + c`) multiplies the risk: each hop can be a non-pointer. Prove each hop,
-or do not take it. A real incident: a hook chased `[[req+8]+0x200]+0x48`, but `+0x200` lay **past the end** of
-the `req` structure, so the last hop read a garbage value and faulted — which hung the whole process. The fix
-was to read only a bounded, typed span **inside** the known structure and follow no pointer at all. When you
-genuinely need one hop outside, prove the intermediate's type first (question 1 above), and keep it behind an
-off-by-default switch until a log-only run confirms it.
+A multi-hop chase (`[[obj + A] + B] + C`) multiplies the risk: each hop can be a non-pointer. Prove each hop,
+or do not take it. A representative failure: a hook chased `[[obj + A] + B] + C`, but offset `B` lay **past the
+end** of the object's allocation, so that hop read a non-pointer value and the next dereference faulted — which
+hung the whole process. The fix was to read only a bounded, typed span **inside** the known structure and
+follow no pointer at all. When you genuinely need one hop outside, prove the intermediate's type first
+(question 1 above), and keep it behind an off-by-default switch until a log-only run confirms it.
 
 ## Reading memory you are unsure about
 

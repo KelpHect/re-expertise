@@ -57,13 +57,23 @@ class PE:
     def __init__(self, path):
         self.path = Path(path)
         self.data = self.path.read_bytes()
-        self.pe = pefile.PE(data=self.data, fast_load=True)
-        self.pe.parse_data_directories(directories=[
-            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
-            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXCEPTION"],
-        ])
+        self.pe = pefile.PE(data=self.data, fast_load=True)  # directories parsed lazily, on demand
         self.base = self.pe.OPTIONAL_HEADER.ImageBase
         self.sections = self.pe.sections
+        self._imports_parsed = False
+        self._exception_parsed = False
+
+    def _ensure_imports(self):
+        if not self._imports_parsed:
+            self.pe.parse_data_directories(
+                directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+            self._imports_parsed = True
+
+    def _ensure_exception(self):
+        if not self._exception_parsed:
+            self.pe.parse_data_directories(
+                directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXCEPTION"]])
+            self._exception_parsed = True
 
     # -- address mapping -------------------------------------------------------------------------------
     def rva2off(self, rva):
@@ -151,17 +161,33 @@ def disasm(pe: PE, rva, count=40, before=0):
     return out
 
 
+def _pdata_raw(pe: PE):
+    """The RUNTIME_FUNCTION table bytes, bounded by the exception data-directory size (the section may hold
+    zero padding past the table, which would break the sorted-order binary search)."""
+    dd = pe.pe.OPTIONAL_HEADER.DATA_DIRECTORY
+    exc = dd[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXCEPTION"]]
+    if not exc.VirtualAddress or not exc.Size:
+        return b""
+    o = pe.rva2off(exc.VirtualAddress)
+    return pe.data[o:o + exc.Size] if o is not None else b""
+
+
 def func_of(pe: PE, rva):
     """The function containing rva, from the .pdata RUNTIME_FUNCTION table (chained unwind followed to the
-    parent). Returns {begin, end, size, bytes} or None for a leaf/missing entry."""
-    try:
-        rows = pe.pe.DIRECTORY_ENTRY_EXCEPTION
-    except AttributeError:
-        return None
-    found = None
-    for r in rows:
-        if r.struct.BeginAddress <= rva < r.struct.EndAddress:
-            found = (r.struct.BeginAddress, r.struct.EndAddress, r.struct.UnwindData)
+    parent). Binary-searches the raw table, so it is fast on a large binary. Returns {begin, end, size, bytes}
+    or None for a leaf/missing entry."""
+    raw = _pdata_raw(pe)
+    n = len(raw) // 12
+    lo, hi, found = 0, n - 1, None
+    while lo <= hi:                       # the table is sorted by BeginAddress
+        mid = (lo + hi) // 2
+        b, e, u = struct.unpack_from("<III", raw, mid * 12)
+        if rva < b:
+            hi = mid - 1
+        elif rva >= e:
+            lo = mid + 1
+        else:
+            found = (b, e, u)
             break
     if not found:
         return None
@@ -188,27 +214,32 @@ def _text_window(pe: PE):
 
 
 def callers(pe: PE, rva, max_hits=0):
-    """Direct E8 (call) and E9 (jmp) sites whose rel32 targets rva."""
+    """Direct E8 (call) and E9 (jmp) sites whose rel32 targets rva. The rel32 target is computed
+    arithmetically for every candidate opcode; capstone decodes only a confirmed hit (to label call vs jmp)."""
     raw, base = _text_window(pe)
     hits = []
-    for m in re.finditer(rb"[\xE8\xE9]", raw):
-        i = m.start()
-        if i + 5 > len(raw):
+    pos = 0
+    n = len(raw)
+    while True:
+        i = raw.find(b"\xE8", pos)
+        j = raw.find(b"\xE9", pos)
+        if i == -1 and j == -1:
+            break
+        k = min(x for x in (i, j) if x != -1)
+        pos = k + 1
+        if k + 5 > n:
             continue
-        site = base + i
-        o = pe.rva2off(site)
-        if o is None:
+        site = base + k
+        rel = struct.unpack_from("<i", raw, k + 1)[0]
+        if site + 5 + rel != rva:          # E8/E9 are 5 bytes; next ip = site + 5
             continue
-        ins = next(_md.disasm(pe.data[o:o + 16], site), None)
+        ins = next(_md.disasm(raw[k:k + 16], site), None)   # confirm it really decodes as call/jmp here
         if ins is None or ins.mnemonic not in ("call", "jmp"):
             continue
-        tgt = ins.address + ins.size + struct.unpack_from("<i", pe.data, o + 1)[0]
-        if tgt == rva:
-            fn = func_of(pe, site)
-            hits.append({"rva": site, "mnemonic": ins.mnemonic,
-                         "func": fn["begin"] if fn else None})
-            if max_hits and len(hits) >= max_hits:
-                break
+        fn = func_of(pe, site)
+        hits.append({"rva": site, "mnemonic": ins.mnemonic, "func": fn["begin"] if fn else None})
+        if max_hits and len(hits) >= max_hits:
+            break
     return hits
 
 
@@ -238,32 +269,60 @@ def callees(pe: PE, rva):
 
 def code_refs(pe: PE, rva, max_hits=0):
     """rip-relative references to rva from executable sections, plus 8-byte absolute pointers to it
-    (vtable slots, function tables) from data sections."""
+    (vtable slots, function tables) from data sections.
+
+    The rip scan finds candidate ModRM bytes with mod=00/rm=101 ((b & 0xC7) == 0x05), computes the target
+    arithmetically for each plausible immediate size, and decodes backwards only to confirm a match. It never
+    decodes the whole section, so it is fast on a large binary."""
     out = {"rip": [], "pointers": []}
     for s in pe.sections:
         raw = pe.data[s.PointerToRawData:s.PointerToRawData + s.SizeOfRawData]
         sbase = s.VirtualAddress
         if s.Characteristics & 0x20000000:
-            for i in range(0, len(raw) - 5):
-                site = sbase + i
-                o = pe.rva2off(site)
-                ins = None
-                # cheap filter: only try to decode where a ModRM rip-relative form is plausible
-                raw_at = pe.data[o:o + 16] if o is not None else b""
-                ins = next(_md.disasm(raw_at, site), None) if raw_at else None
-                if ins is None:
+            n = len(raw)
+            seen = set()
+            for p in range(n - 5):
+                if (raw[p] & 0xC7) != 0x05:          # not a rip-relative ModRM byte
                     continue
-                if _rip_target(ins) == rva:
-                    out["rip"].append({"rva": site, "mnemonic": ins.mnemonic, "op_str": ins.op_str})
-                    if max_hits and len(out["rip"]) >= max_hits:
-                        break
+                disp = struct.unpack_from("<i", raw, p + 1)[0]
+                for imm in (0, 1, 2, 4):              # bytes of immediate that follow the disp32
+                    end = sbase + p + 5 + imm
+                    if end + disp != rva:
+                        continue
+                    hit = _confirm_rip(pe, raw, sbase, p, rva, seen)
+                    if hit:
+                        out["rip"].append(hit)
+                    break
+                if max_hits and len(out["rip"]) >= max_hits:
+                    break
         else:
             target_va = pe.base + rva
-            for m in re.finditer(struct.pack("<Q", target_va), raw):
-                out["pointers"].append({"rva": sbase + m.start(), "section": s.Name.rstrip(b"\0").decode("latin1")})
+            for m in re.finditer(re.escape(struct.pack("<Q", target_va)), raw):
+                out["pointers"].append({"rva": sbase + m.start(),
+                                        "section": s.Name.rstrip(b"\0").decode("latin1")})
                 if max_hits and len(out["pointers"]) >= max_hits:
                     break
     return out
+
+
+def _confirm_rip(pe: PE, raw, sbase, modrm_pos, rva, seen):
+    """Find the instruction start near a candidate ModRM byte and confirm its rip operand targets rva, with
+    the disp32 sitting right after that ModRM byte. Decodes at most 15 start positions; only on a match."""
+    for back in range(0, 15):
+        start = modrm_pos - back
+        if start < 0:
+            continue
+        site = sbase + start
+        if site in seen:
+            continue
+        ins = next(_md.disasm(raw[start:start + 16], site), None)
+        if ins is None or ins.address != site:
+            continue
+        # disp_offset is the offset of the disp32 within the instruction; the disp sits at modrm_pos + 1
+        if _rip_target(ins) == rva and start + ins.disp_offset == modrm_pos + 1:
+            seen.add(site)
+            return {"rva": site, "mnemonic": ins.mnemonic, "op_str": ins.op_str}
+    return None
 
 
 def strings(pe: PE, pattern, max_hits=0, utf16=False):
@@ -294,6 +353,7 @@ def strings(pe: PE, pattern, max_hits=0, utf16=False):
 def import_map(pe: PE) -> dict:
     """IAT slot RVA -> 'dll!name'."""
     out = {}
+    pe._ensure_imports()
     try:
         entries = pe.pe.DIRECTORY_ENTRY_IMPORT
     except AttributeError:

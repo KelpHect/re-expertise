@@ -10,9 +10,9 @@ plugin reads it at startup, resolves each entry, checks its prologue, and decide
   "name": "Dispatch_Tick",
   "resolve": "hash",            // "symbol" | "hash" | "pattern"
   "hash": "0x1234ABCD",         // for hash resolution (a table the host/loader ships)
-  "pattern": "48 89 5C 24 10 ...",   // for pattern resolution (fallback)
+  "pattern": "53 48 83 EC 20 ...",   // for pattern resolution (fallback)
   "required": false,
-  "expect": "48 89 5C 24 10 48 89 74 24 18 55 57 41 56 48 8D ??",
+  "expect": "53 48 83 EC 20 48 8D 0D ? ? ? ?",
   "note": "called once per frame from the main loop; see engine map"
 }
 ```

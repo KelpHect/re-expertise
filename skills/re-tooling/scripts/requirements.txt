@@ -1,0 +1,4 @@
+# Dependencies for the re-tooling helpers (pecore.py, petool.py).
+# Pinned; both releases are well over two weeks old.
+capstone==5.0.9
+pefile==2024.8.26

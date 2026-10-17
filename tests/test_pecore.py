@@ -79,6 +79,16 @@ class PEFixtureTests(unittest.TestCase):
         r = pecore.code_refs(self.pe, make_pe.DATA_DWORD)
         self.assertIn(make_pe.SITE_MOV_DATA, {h["rva"] for h in r["rip"]})
 
+    def test_refs_vtable_holds_func_b(self):
+        # "which vtable holds this function": func_b sits in slot 1 of the vtable at VTABLE_RVA
+        r = pecore.code_refs(self.pe, make_pe.FUNC_B)
+        self.assertIn(make_pe.VTABLE_RVA + 8, {p["rva"] for p in r["pointers"]})
+
+    def test_refs_iat_callers(self):
+        # "IAT refs": the call [rip->IAT] site references the ExitProcess slot
+        r = pecore.code_refs(self.pe, make_pe.IAT)
+        self.assertIn(make_pe.SITE_CALL_IAT, {h["rva"] for h in r["rip"]})
+
     def test_strings(self):
         out = pecore.strings(self.pe, "fixture")
         self.assertEqual(out[0]["rva"], make_pe.STRING_RVA)

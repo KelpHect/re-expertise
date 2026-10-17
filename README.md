@@ -52,11 +52,13 @@ npx skills@1.7.0 add <owner>/re-expertise --skill re-ghidra-mcp -a claude-code
 
 | Tool | Project scope | Global scope |
 |---|---|---|
-| Claude Code | `.claude/skills/` | `~/.claude/skills/` |
-| OpenCode | `.agents/skills/` | `~/.config/opencode/skills/` |
+| Claude Code | `.claude/skills/` | `~/.claude/skills/` (symlink → `~/.agents/skills/`) |
+| OpenCode | `.agents/skills/` | `~/.agents/skills/` (also reads `~/.config/opencode/skills/`) |
 
-The CLI symlinks by default; pass `--copy` to force copies (useful on Windows, where symlink creation may need
-elevation or Developer Mode and otherwise falls back to a copy or junction).
+Observed with `skills@1.7.0` on Windows (`-g -a claude-code -a opencode`): the real folders went to
+`~/.agents/skills/<name>/`, which OpenCode reads directly (the CLI calls it "universal"), and
+`~/.claude/skills/<name>` became a symlink to them for Claude Code. So one copy serves both tools. Pass
+`--copy` to force copies instead of symlinks (useful where symlink creation needs elevation or Developer Mode).
 
 ### Install from a local clone (before publishing)
 
@@ -71,7 +73,7 @@ Published repos are listed by install count on [skills.sh](https://skills.sh).
 ## Example prompts that trigger each skill
 
 - re-workflow — "Help me plan this reverse-engineering task evidence-first; I keep guessing at offsets."
-- re-tooling — "Which functions in this .exe call the function at RVA 0x3887d4? Find the string xref first."
+- re-tooling — "Which functions in this .exe call the one that references the 'config.json' string? Find the string xref first."
 - re-ghidra-mcp — "Set up Ghidra headless analysis and keep the MCP server always-on; it keeps dropping after reboots."
 - re-rea — "Make rea reuse my already-analysed Ghidra project instead of re-importing the binary every call."
 - re-hooking — "I'm adding a native hook to my mod; how do I resolve the address across versions and keep it from crashing the host?"

@@ -9,11 +9,13 @@ re-apply it on every labelling pass.
 One row per function you have named. A tab-separated file is enough:
 
 ```
-# address    name                    note / evidence                                   expect (first bytes, hex; ? = wildcard)
-0x1003887    Config_Load             reads "config.json"; xref from strings pass        48 89 5C 24 10 48 89 74 24 18 55 57 41 56
-0x10029D0    Report_Write            writes the "!!!report!!!" banner                   40 55 53 56 57 41 54 ...
-0x10041B2    Dispatch_Tick           called every frame from the main loop (see map)    FF 15 ? ? ? ? 48 8B C8 ...
+# address  name          note / evidence                            expect (first bytes, hex; ? = wildcard)
+0x1000     Config_Load   references the "config.json" string         53 48 83 EC 20 48 8D 0D ? ? ? ?
+0x1040     Value_Read    reads the settings dword; called from load  8B 05 ? ? ? ? C3
+0x1060     Tick_Dispatch tail-calls the value reader each frame      31 C0 E9 ? ? ? ?
 ```
+
+(Addresses and bytes above are from the test fixture in this repo, not from any real product.)
 
 - **address** — an RVA (preferred) or VA.
 - **name** — your symbol; keep a prefix (e.g. `RE_`) so your labels are distinguishable from the binary's own.

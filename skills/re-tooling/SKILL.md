@@ -13,12 +13,12 @@ license: MIT
 
 Two Python files in `scripts/`:
 
-- **`pecore.py`** — pure functions over a `PE` built from a file path. Import these from your own code and
-  tests. No binary is modified and no process is touched.
-- **`petool.py`** — a thin CLI over `pecore`. Run `python -I petool.py <command> <binary> [args]`.
+- **`scripts/pecore.py`** — pure functions over a `PE` built from a file path. Import these from your own code
+  and tests. No binary is modified and no process is touched.
+- **`scripts/petool.py`** — a thin CLI over `pecore`. Run `python -I petool.py <command> <binary> [args]`.
 
-They need only `capstone` and `pefile` (pin them: see the repo `requirements.txt`). The design ideas are
-general; these are written fresh, not copied from any project.
+They need only `capstone` and `pefile`, pinned in `scripts/requirements.txt` (`pip install -r
+scripts/requirements.txt`). The design ideas are general; these are written fresh, not copied from any project.
 
 Run untrusted binaries' tooling with `python -I` so the target's directory cannot inject a module; `petool.py`
 adds its own directory to `sys.path` explicitly so it still finds `pecore` under `-I`.

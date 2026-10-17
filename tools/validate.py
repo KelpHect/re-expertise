@@ -15,9 +15,11 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKILLS = os.path.join(ROOT, "skills")
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+# Backticked references to sibling files (`references/x.md`, `scripts/x.py`) are the common skill convention;
+# treat them as links that must resolve too.
+BACKTICK_REF_RE = re.compile(r"`((?:references|scripts)/[^`]+?\.[A-Za-z0-9]+)`")
 
 
 def parse_frontmatter(text):
@@ -80,9 +82,10 @@ def check_skill(folder, problems):
     elif not (1 <= len(desc) <= 1024):
         problems.append("%s: description length %d not in 1..1024" % (name, len(desc)))
 
-    # links resolve
+    # links resolve: markdown links, and backticked references/ and scripts/ paths
     body = text[text.find("\n---", 3) + 4:] if text.startswith("---") else text
-    for target in LINK_RE.findall(body):
+    targets = list(LINK_RE.findall(body)) + list(BACKTICK_REF_RE.findall(body))
+    for target in targets:
         link = target.split("#")[0].strip()
         if not link or link.startswith(("http://", "https://", "mailto:")):
             continue
@@ -90,15 +93,14 @@ def check_skill(folder, problems):
             problems.append("%s: broken link %r" % (name, target))
 
 
-def main():
+def validate(skills_dir):
+    """Return a list of problem strings (empty = valid) plus the skill folders found."""
     problems = []
-    if not os.path.isdir(SKILLS):
-        print("no skills/ directory at %s" % SKILLS)
-        return 1
-    entries = sorted(os.listdir(SKILLS))
+    if not os.path.isdir(skills_dir):
+        return ["no skills/ directory at %s" % skills_dir], []
     skill_dirs = []
-    for e in entries:
-        p = os.path.join(SKILLS, e)
+    for e in sorted(os.listdir(skills_dir)):
+        p = os.path.join(skills_dir, e)
         if os.path.isfile(p):
             problems.append("skills/%s is a file; skills must be folders" % e)
         elif os.path.isdir(p):
@@ -107,7 +109,24 @@ def main():
         problems.append("skills/ holds no skill folders")
     for folder in skill_dirs:
         check_skill(folder, problems)
+    return problems, skill_dirs
 
+
+def resolve_skills_dir(argv):
+    """argv[0] may be a repo root (…/skills), a skills dir directly, or absent (default to this repo)."""
+    if not argv:
+        return os.path.join(ROOT, "skills")
+    arg = argv[0]
+    if os.path.basename(os.path.normpath(arg)) == "skills":
+        return arg
+    if os.path.isdir(os.path.join(arg, "skills")):
+        return os.path.join(arg, "skills")
+    return arg
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    problems, skill_dirs = validate(resolve_skills_dir(argv))
     if problems:
         print("VALIDATION FAILED (%d problem(s)):" % len(problems))
         for p in problems:
@@ -117,6 +136,7 @@ def main():
     for folder in skill_dirs:
         print("  - " + os.path.basename(folder))
     return 0
+
 
 
 if __name__ == "__main__":
