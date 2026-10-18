@@ -39,13 +39,13 @@ until the repository is published somewhere the CLI can fetch it.
 
 ```sh
 # See what the repo offers (from a published repo)
-npx skills@1.7.0 add <owner>/re-expertise --list
+npx skills@1.7.0 add KelpHect/re-expertise --list
 
 # Global install for BOTH tools (one copy serves Claude Code and OpenCode)
-npx skills@1.7.0 add <owner>/re-expertise -g -a claude-code -a opencode -y
+npx skills@1.7.0 add KelpHect/re-expertise -g -a claude-code -a opencode -y
 
 # One skill, into the current project only, for one tool
-npx skills@1.7.0 add <owner>/re-expertise --skill re-ghidra-mcp -a claude-code
+npx skills@1.7.0 add KelpHect/re-expertise --skill re-ghidra-mcp -a claude-code
 ```
 
 ### Where the CLI puts them
